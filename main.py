@@ -261,18 +261,28 @@ class TripsParser:
         current_pay = 0.0
         current_drivers = []
         current_loads = "?"
+        is_rejected = False
         is_canceled = False
         temp_locations = []
         temp_times = []
 
         def save_block():
-            nonlocal current_ids, current_pay, current_drivers, current_loads, is_canceled
+            nonlocal current_ids, current_pay, current_drivers, current_loads, is_canceled, is_rejected
             nonlocal temp_locations, temp_times
             
             if current_ids:
                 drvs = current_drivers if current_drivers else ["UNKNOWN"]
                 pay = current_pay
-                status = "Canceled" if is_canceled else "Active"
+
+                if is_rejected:
+                    status = "Rejected"
+                elif is_canceled:
+                    status = "Canceled"
+                else:
+                    status = "Active"
+
+                # status = "Canceled" if is_canceled else "Active"
+                
                 
                 start_location = temp_locations[0] if temp_locations else ""
                 end_location = ""
@@ -304,6 +314,7 @@ class TripsParser:
             current_drivers = []
             current_loads = "?"
             is_canceled = False
+            is_rejected = False
             temp_locations = []
             temp_times = []
 
@@ -318,10 +329,13 @@ class TripsParser:
             id_match = re.search(ID_PATTERN, line)
             if id_match:
                 found_id = id_match.group(1)
-                if current_ids and (current_drivers or current_pay > 0 or is_canceled):
+                if current_ids and (current_drivers or current_pay > 0 or is_canceled or is_rejected):
                     save_block()
                 current_ids.append(found_id)
                 continue
+            
+            if "Rejected" in line:
+                is_rejected = True
 
             if "Canceled" in line or "Cancelled" in line:
                 is_canceled = True
@@ -576,6 +590,7 @@ def render_driver_statistics(df, driver_name):
     paid_trips = len(driver_df[driver_df['Tolangan'] > 0])
     unpaid_trips = len(driver_df[driver_df['Status'] == 'Unpaid'])
     
+    
     with col1:
         st.markdown(f"""
         <div class="mini-stat">
@@ -693,7 +708,7 @@ def render_driver_statistics(df, driver_name):
 def render_hero_header():
     st.markdown("""
     <div style="text-align: center; padding: 2rem 0;">
-        <h1 class="hero-title">🚚 Driver Payroll</h1>
+        <h1 class="hero-title">🚚 Pro Driver Payroll</h1>
         <p style="color: #a0a0a0; font-size: 1.1rem;">Professional Accounting & Analytics System</p>
     </div>
     """, unsafe_allow_html=True)
@@ -703,9 +718,9 @@ def render_sidebar():
         st.markdown("""
         <div style="text-align: center; margin-bottom: 2rem;">
             <div style="background: rgba(255,255,255,0.1); width: 80px; height: 80px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);">
-                <span style="font-size: 30px;">🚚</span>
+                <span style="font-size: 30px;">5️⃣</span>
             </div>
-            <h3 style="margin-top: 1rem; color: #fff;">Payroll App</h3>
+            <h3 style="margin-top: 1rem; color: #fff;">Payroll Version 5</h3>
         </div>
         """, unsafe_allow_html=True)
         
@@ -726,7 +741,7 @@ def render_assignment_section(ids_to_resolve, trips_data, invoice_data, sorted_d
     
     st.markdown(f"""
     <div style="background: rgba(255, 153, 0, 0.1); border-left: 4px solid #ff9900; padding: 1rem; border-radius: 10px; margin-bottom: 2rem;">
-        <h4 style="margin: 0; color: #ff9900;">⚠️ Diqqat: {len(ids_to_resolve)} ta yuk</h4>
+        <h4 style="margin: 0; color: #ff9900;">⚠️ Diqqat Talab: {len(ids_to_resolve)} ta yuk</h4>
         <p style="margin: 5px 0 0 0; color: #ccc; font-size: 0.9rem;">Iltimos, ushbu yuklarni haydovchilarga to'g'ri biriktiring.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -805,6 +820,8 @@ def generate_excel_report(df):
             header_format = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
             currency_format = workbook.add_format({'num_format': '0.00', 'border': 1})
             text_format = workbook.add_format({'border': 1, 'align': 'left'})
+            total_format = workbook.add_format({'bold': True, 'font_size': 14 ,'bg_color': "#4444C4", 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+            totalgross_format = workbook.add_format({'bold': True,  'align': 'left'})
             
             summary_data = []
             for driver in sorted(df['Driver'].unique()):
@@ -823,19 +840,22 @@ def generate_excel_report(df):
             for i, col in enumerate(summary_df.columns):
                 ws.write(1, i, col, header_format)
             ws.set_column('A:A', 25)
-            ws.set_column('B:C', 15, currency_format)
+            ws.set_column('B:C', 15,)
             
             for driver in sorted(df['Driver'].unique()):
                 d_df = df[df['Driver'] == driver].copy()
-                export_df = d_df[['ID', 'Start Location', 'Start Time', 'End Location', 'End Time', 'Kutilgan', 'Tolangan', 'Farq', 'Yuklar (Trips)', 'Yuklar (Inv)']]
+                export_df = d_df[['ID', 'Start Location', 'Start Time', 'End Location', 'End Time', 'Kutilgan', 'Tolangan', 'Farq', ]]
                 sheet_name = driver.replace('/', '-')[:31]
                 ws = workbook.add_worksheet(sheet_name)
-                ws.write(0, 0, f'Driver: {driver}', workbook.add_format({'bold': True, 'font_size': 14}))
+
+                # 1. Sarlavha
+                ws.write(1, 0, f'Driver: {driver}', workbook.add_format({'bold': True, 'font_size': 14}))
                 
+                # 2. Jadval sarlavhalarini yozish
                 headers = export_df.columns.values
                 for i, h in enumerate(headers):
                     ws.write(2, i, h, header_format)
-                
+                #(Row by Row)
                 for i, row in enumerate(export_df.itertuples(index=False)):
                     ws.write(i+3, 0, row[0], text_format)
                     ws.write(i+3, 1, row[1], text_format)
@@ -845,15 +865,33 @@ def generate_excel_report(df):
                     ws.write(i+3, 5, row[5], currency_format)
                     ws.write(i+3, 6, row[6], currency_format)
                     ws.write(i+3, 7, row[7], currency_format)
-                    ws.write(i+3, 8, row[8], text_format)
-                    ws.write(i+3, 9, row[9], text_format)
+                # YANGI LOGIKA
+                last_row = len(d_df) + 3 # Ma'lumotlardan keyingi qatorni aniqlaymiz
+    
+                # Jami summani hisoblaymiz
+                total_tolangan = d_df['Tolangan'].sum()
+
+                # A dan E gacha bo'lgan kataklarni birlashtirib "TOTAL GROSS:" deb yozamiz
+                ws.merge_range(last_row, 4, last_row, 5, 'TOTAL GROSS:', totalgross_format)
+
+                # Hisoblangan summalarni tegishli ustunlarga (F, G, H) yozamiz
+                ws.write(last_row, 6, total_tolangan, total_format) # G ustuni
+
                 
+
+                # --- YANGI LOGIKA TUGADI ---
+                
+                # Set column widths
                 ws.set_column('A:A', 16)
                 ws.set_column('B:B', 30)
+                ws.set_column('C:C', 25)
+                ws.set_column('D:D', 30)
+                ws.set_column('E:E', 25)
                 ws.set_column('F:H', 15)
         output.seek(0)
         return output
-    except Exception:
+    except Exception as e:
+        st.error(f"Excel xatosi: {e}") # Bu xatoni ekranga chiqaradi
         return None
 
 # ==============================================================================
