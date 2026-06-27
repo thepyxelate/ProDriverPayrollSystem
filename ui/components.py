@@ -51,7 +51,7 @@ def render_top_earners(df: pd.DataFrame):
 def render_rpm_chart(df: pd.DataFrame):
     """Top 15 haydovchi bo'yicha o'rtacha RPM"""
     if 'RPM' not in df.columns or df['RPM'].sum() == 0:
-        st.info("💡 RPM (Revenue Per Mile) ko'rsatish uchun Trips faylida '$X.XX/mi' qatori bo'lishi kerak.")
+        st.info("💡 RPM (Rate Per Mile) ko'rsatish uchun Trips faylida '$X.XX/mi' qatori bo'lishi kerak.")
         return
     
     driver_avg_rpm = df.groupby('Driver')['RPM'].mean().reset_index()

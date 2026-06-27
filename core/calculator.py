@@ -1,6 +1,6 @@
 # core/calculator.py
 import pandas as pd
-from typing import Dict, List, Tuple
+from typing import Dict
 from core.models import Trip, Invoice
 
 def build_dataframe(trips_data: Dict[str, Trip], invoice_data: Dict[str, Invoice]) -> pd.DataFrame:
@@ -24,6 +24,18 @@ def build_dataframe(trips_data: Dict[str, Trip], invoice_data: Dict[str, Invoice
         if final_status == "Canceled (No Pay)":
             expected = 0.0
         
+        # RPM va Miles ni to'langanlikka qarab belgilash
+        if final_status == "Canceled (Paid)":
+            rpm_value = 5.0
+            miles_value = 35.0
+        elif final_status == "Paid":
+            rpm_value = trip.rpm
+            miles_value = trip.miles
+        else:
+            # To'lanmagan yoki boshqa holatlar: RPM ni 0 qilamiz (o'rtachaga ta'sir qilmasligi uchun)
+            rpm_value = 0.0
+            miles_value = trip.miles  # miles ni saqlab qolamiz, lekin hisobga olinmaydi
+        
         for driver in trip.drivers:
             if driver == "UNKNOWN" and paid == 0 and trip.status == "Canceled":
                 continue
@@ -40,28 +52,31 @@ def build_dataframe(trips_data: Dict[str, Trip], invoice_data: Dict[str, Invoice
                 "Farq": diff,
                 "Yuklar (Trips)": trip.loads_str,
                 "Yuklar (Inv)": len(inv.items) if inv else 0,
-                "RPM": trip.rpm,
-                "Miles": miles, 
+                "RPM": rpm_value,
+                "Miles": miles_value,
             })
     
     return pd.DataFrame(rows)
 
+
 def compute_driver_stats(df: pd.DataFrame, driver_name: str) -> Dict:
-    """Berilgan haydovchi uchun statistikani hisoblaydi"""
+    """Berilgan haydovchi uchun statistikani hisoblaydi (faqat to'langan triplar RPM da)"""
     driver_df = df[df['Driver'] == driver_name]
     if driver_df.empty:
         return {}
     
     total_earned = driver_df['Tolangan'].sum()
     total_trips = len(driver_df)
-    avg_per_trip = total_earned / total_trips if total_trips > 0 else 0
     paid_trips = len(driver_df[driver_df['Tolangan'] > 0])
     unpaid_trips = len(driver_df[driver_df['Status'] == 'Unpaid'])
+    avg_per_trip = total_earned / total_trips if total_trips > 0 else 0
     
-    has_rpm = 'RPM' in driver_df.columns and driver_df['RPM'].sum() > 0
-    avg_rpm = driver_df['RPM'].mean() if has_rpm else 0
-
-    # Miles
+    # RPM: faqat to'langan (Paid yoki Canceled Paid) triplar bo'yicha
+    paid_df = driver_df[driver_df['Tolangan'] > 0]
+    has_rpm = 'RPM' in paid_df.columns and not paid_df.empty
+    avg_rpm = paid_df['RPM'].mean() if has_rpm else 0
+    
+    # Miles: jami miles (barcha triplar bo'yicha, lekin to'langanlar ham hisobga olinadi)
     has_miles = 'Miles' in driver_df.columns and driver_df['Miles'].sum() > 0
     total_miles = driver_df['Miles'].sum() if has_miles else 0
     

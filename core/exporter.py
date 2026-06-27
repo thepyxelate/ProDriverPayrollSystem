@@ -21,7 +21,8 @@ def generate_txt_report(df: pd.DataFrame) -> str:
         d_df = df[df['Driver'] == driver]
         paid_sum = d_df['Tolangan'].sum()
         pending_sum = d_df[d_df['Status'] == 'Unpaid']['Kutilgan'].sum()
-        avg_rpm = d_df['RPM'].mean() if has_rpm else 0
+        paid_only = d_df[d_df['RPM'] > 0]
+        avg_rpm = paid_only['RPM'].mean() if not paid_only.empty else 0
         total_miles = d_df['Miles'].sum() if has_miles else 0
         
         lines.append(f"\n{'='*160}")
@@ -106,7 +107,8 @@ def generate_excel_report(df: pd.DataFrame) -> Optional[BytesIO]:
             summary_data = []
             for driver in sorted(df['Driver'].unique()):
                 d_df = df[df['Driver'] == driver]
-                avg_rpm = d_df['RPM'].mean() if has_rpm else 0
+                paid_only = d_df[d_df['RPM'] > 0]  
+                avg_rpm = paid_only['RPM'].mean() if not paid_only.empty else 0
                 total_miles = d_df['Miles'].sum() if has_miles else 0
                 summary_data.append({
                     'Driver': driver,
