@@ -16,9 +16,6 @@ def render_sidebar():
         trips_file = st.file_uploader("📋 Trips File (.txt)", type=['txt'], key="trips")
         invoice_file = st.file_uploader("💰 Invoice File (.txt)", type=['txt'], key="inv")
         
-        st.markdown("---")
-        st.markdown("### 📏 RPM (Revenue Per Mile)")
-        st.markdown("RPM avtomatik ravishda Trips faylidagi `$X.XX/mi` qatoridan olinadi.")
         
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🔄 Yangilash"):
