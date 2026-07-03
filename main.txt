@@ -206,6 +206,7 @@ st.markdown("""
 ID_PATTERN = r"(B-[A-Z0-9]{8,9}|T-[A-Z0-9]{8,9}|\b[0-9][0-9A-Z]{8,9}\b)"
 DRIVER_PATTERN = r"(?i)([a-z]\.\s+[a-z]+(?:\s+[a-z]+)?)"
 LOADS_PATTERN = r"(?i)(\d+(?:/\d+)?)\s+Loads"
+RPM_PATTERN = r"\$\s*([\d,]+\.\d{2})\s*/\s*mi"
 
 def parse_currency(value_str):
     """Parse currency values with high precision"""
@@ -265,10 +266,11 @@ class TripsParser:
         is_canceled = False
         temp_locations = []
         temp_times = []
+        current_rpm = 0.0  # <-- new field
 
         def save_block():
             nonlocal current_ids, current_pay, current_drivers, current_loads, is_canceled, is_rejected
-            nonlocal temp_locations, temp_times
+            nonlocal temp_locations, temp_times, current_rpm
             
             if current_ids:
                 drvs = current_drivers if current_drivers else ["UNKNOWN"]
@@ -281,9 +283,6 @@ class TripsParser:
                 else:
                     status = "Active"
 
-                # status = "Canceled" if is_canceled else "Active"
-                
-                
                 start_location = temp_locations[0] if temp_locations else ""
                 end_location = ""
                 
@@ -306,7 +305,8 @@ class TripsParser:
                         'start_location': start_location,
                         'end_location': end_location,
                         'start_time': start_time,
-                        'end_time': end_time
+                        'end_time': end_time,
+                        'rpm': current_rpm   # <-- store RPM
                     }
             
             current_ids = []
@@ -317,6 +317,7 @@ class TripsParser:
             is_rejected = False
             temp_locations = []
             temp_times = []
+            current_rpm = 0.0
 
         loc_pattern = r"([A-Z0-9]{3,6}\s+[A-Z][A-Za-z\s]+,\s+[A-Z]{2}\s+\d{5})"
         time_pattern = r"([A-Za-z]{3},\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{2}:\d{2}\s+[A-Z]{3})"
@@ -341,6 +342,15 @@ class TripsParser:
                 is_canceled = True
             if line.startswith('$') and '/mi' not in line:
                 current_pay = parse_currency(line)
+            
+            # --- RPM extraction ---
+            rpm_match = re.search(RPM_PATTERN, line)
+            if rpm_match:
+                rpm_str = rpm_match.group(1).replace(',', '')
+                try:
+                    current_rpm = float(rpm_str)
+                except:
+                    current_rpm = 0.0
             
             loads_match = re.search(LOADS_PATTERN, line)
             if loads_match:
@@ -406,11 +416,11 @@ class InvoiceParser:
             return {}, 0
 
 # ==============================================================================
-# 4. ENHANCED VISUALIZATION COMPONENTS
+# 4. ENHANCED VISUALIZATION COMPONENTS (with RPM from trips)
 # ==============================================================================
 
 def render_advanced_charts(df):
-    """Render beautiful and interactive analytics"""
+    """Render beautiful and interactive analytics, now with RPM from trips"""
     
     # --- CHART 1: TOP EARNERS (Only Paid Amount) ---
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
@@ -561,8 +571,50 @@ def render_advanced_charts(df):
     st.plotly_chart(fig_routes, use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # --- NEW CHART 5: RPM (Revenue Per Mile) from trips file ---
+    # Check if we have RPM data
+    if 'RPM' in df.columns and df['RPM'].sum() > 0:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown("### 📈 Oʻrtacha RPM (Milega To'g'ri Keladigan Daromad) - Top 15")
+
+        # Compute average RPM per driver
+        driver_avg_rpm = df.groupby('Driver')['RPM'].mean().reset_index()
+        driver_avg_rpm = driver_avg_rpm[driver_avg_rpm['Driver'] != "UNKNOWN"]
+        driver_avg_rpm = driver_avg_rpm.sort_values('RPM', ascending=False).head(15)
+
+        if not driver_avg_rpm.empty:
+            fig_rpm = px.bar(
+                driver_avg_rpm,
+                x='RPM',
+                y='Driver',
+                orientation='h',
+                text='RPM',
+                color='RPM',
+                color_continuous_scale=['#f093fb', '#4facfe', '#00f2fe']
+            )
+            fig_rpm.update_traces(
+                texttemplate='%{text:.2f}',
+                textposition='outside'
+            )
+            fig_rpm.update_layout(
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                yaxis=dict(autorange="reversed", title=""),
+                xaxis=dict(title="RPM ($/mil)", showgrid=True, gridcolor='rgba(255,255,255,0.05)'),
+                height=500,
+                margin=dict(l=20, r=20, t=20, b=20),
+                coloraxis_showscale=False
+            )
+            st.plotly_chart(fig_rpm, use_container_width=True)
+        else:
+            st.info("RPM ma'lumotlari mavjud emas.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("💡 RPM (Revenue Per Mile) ko'rsatish uchun Trips faylida '$X.XX/mi' qatori bo'lishi kerak. Hozircha topilmadi.")
+
 def render_driver_statistics(df, driver_name):
-    """Render detailed statistics for selected driver"""
+    """Render detailed statistics for selected driver, including RPM"""
     
     if driver_name == "All":
         return
@@ -581,55 +633,78 @@ def render_driver_statistics(df, driver_name):
     </div>
     """, unsafe_allow_html=True)
     
-    # MINI STATS ROW
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
+    # MINI STATS ROW (add RPM if available)
     total_earned = driver_df['Tolangan'].sum()
     total_trips = len(driver_df)
     avg_per_trip = total_earned / total_trips if total_trips > 0 else 0
     paid_trips = len(driver_df[driver_df['Tolangan'] > 0])
     unpaid_trips = len(driver_df[driver_df['Status'] == 'Unpaid'])
     
+    # Check for RPM
+    has_rpm = 'RPM' in driver_df.columns and driver_df['RPM'].sum() > 0
+    avg_rpm = driver_df['RPM'].mean() if has_rpm else 0
+
+    # Decide number of columns
+    if has_rpm:
+        cols = st.columns(6)
+        col_idx = 0
+    else:
+        cols = st.columns(5)
+        col_idx = 0
     
-    with col1:
+    with cols[col_idx]:
         st.markdown(f"""
         <div class="mini-stat">
             <div class="mini-stat-label">Jami Daromad</div>
             <div class="mini-stat-value">{format_currency(total_earned)}</div>
         </div>
         """, unsafe_allow_html=True)
+    col_idx += 1
     
-    with col2:
+    with cols[col_idx]:
         st.markdown(f"""
         <div class="mini-stat">
             <div class="mini-stat-label">Jami Triplar</div>
             <div class="mini-stat-value">{total_trips}</div>
         </div>
         """, unsafe_allow_html=True)
+    col_idx += 1
     
-    with col3:
+    with cols[col_idx]:
         st.markdown(f"""
         <div class="mini-stat">
             <div class="mini-stat-label">O'rtacha/Trip</div>
             <div class="mini-stat-value">{format_currency(avg_per_trip)}</div>
         </div>
         """, unsafe_allow_html=True)
+    col_idx += 1
     
-    with col4:
+    with cols[col_idx]:
         st.markdown(f"""
         <div class="mini-stat">
             <div class="mini-stat-label">To'langan</div>
             <div class="mini-stat-value" style="color: #10B981;">{paid_trips}</div>
         </div>
         """, unsafe_allow_html=True)
+    col_idx += 1
     
-    with col5:
+    with cols[col_idx]:
         st.markdown(f"""
         <div class="mini-stat">
             <div class="mini-stat-label">Kutilmoqda</div>
             <div class="mini-stat-value" style="color: #EF4444;">{unpaid_trips}</div>
         </div>
         """, unsafe_allow_html=True)
+    col_idx += 1
+    
+    if has_rpm:
+        with cols[col_idx]:
+            st.markdown(f"""
+            <div class="mini-stat">
+                <div class="mini-stat-label">Oʻrtacha RPM</div>
+                <div class="mini-stat-value" style="color: #FBBF24;">{avg_rpm:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -728,6 +803,10 @@ def render_sidebar():
         trips_file = st.file_uploader("📋 Trips File (.txt)", type=['txt'], key="trips")
         invoice_file = st.file_uploader("💰 Invoice File (.txt)", type=['txt'], key="inv")
         
+        st.markdown("---")
+        st.markdown("### 📏 RPM (Revenue Per Mile)")
+        st.markdown("RPM avtomatik ravishda Trips faylidagi `$X.XX/mi` qatoridan olinadi.")
+        
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🔄 Yangilash"):
             st.session_state.clear()
@@ -776,18 +855,28 @@ def generate_txt_report(df):
     lines.append("="*160)
     lines.append("")
     
+    # Check for RPM
+    has_rpm = 'RPM' in df.columns and df['RPM'].sum() > 0
+    
     for driver in sorted(df['Driver'].unique()):
         d_df = df[df['Driver'] == driver]
         paid_sum = d_df['Tolangan'].sum()
         pending_sum = d_df[d_df['Status'] == 'Unpaid']['Kutilgan'].sum()
+        avg_rpm = d_df['RPM'].mean() if has_rpm else 0
         
         lines.append(f"\n{'='*160}")
         lines.append(f"👤 HAYDOVCHI: {driver}")
         lines.append(f"   💰 Jami To'landi: {format_currency(paid_sum)}")
         lines.append(f"   ⏳ Kutilmoqda: {format_currency(pending_sum)}")
+        if has_rpm:
+            lines.append(f"   📏 Oʻrtacha RPM: {avg_rpm:.2f}")
         lines.append(f"{'='*160}")
         
-        lines.append(f"{'ID':<16} {'Start Location':<30} {'Start Time':<25} {'End Location':<30} {'End Time':<25} {'Kutilgan':<12} {'To\'langan':<12} {'Farq':<10}")
+        # Header for trip details
+        header = f"{'ID':<16} {'Start Location':<30} {'Start Time':<25} {'End Location':<30} {'End Time':<25} {'Kutilgan':<12} {'To\'langan':<12} {'Farq':<10}"
+        if has_rpm:
+            header += " {'RPM':<10}"
+        lines.append(header)
         lines.append("-" * 160)
         
         for _, row in d_df.iterrows():
@@ -800,15 +889,20 @@ def generate_txt_report(df):
             tol = format_currency(row['Tolangan']) if isinstance(row['Tolangan'], (int, float)) else str(row['Tolangan'])
             far = format_currency(row['Farq']) if isinstance(row['Farq'], (int, float)) else str(row['Farq'])
             
-            lines.append(
-                f"{row['ID']:<16} {start_loc:<30} {start_time:<25} {end_loc:<30} {end_time:<25} "
-                f"{kut:<12} {tol:<12} {far:<10}"
-            )
+            line = (f"{row['ID']:<16} {start_loc:<30} {start_time:<25} {end_loc:<30} {end_time:<25} "
+                    f"{kut:<12} {tol:<12} {far:<10}")
+            if has_rpm:
+                rpm_val = row.get('RPM', 0)
+                line += f" {rpm_val:<10.2f}"
+            lines.append(line)
         lines.append("")
     
     lines.append("\n" + "="*160)
     lines.append(f"UMUMIY JAMI TO'LANGAN: {format_currency(df['Tolangan'].sum())}")
     lines.append(f"UMUMIY KUTILMOQDA: {format_currency(df[df['Status'] == 'Unpaid']['Kutilgan'].sum())}")
+    if has_rpm:
+        overall_avg_rpm = df['RPM'].mean()
+        lines.append(f"UMUMIY OʻRTACHA RPM: {overall_avg_rpm:.2f}")
     lines.append("="*160)
     return "\n".join(lines)
 
@@ -823,14 +917,18 @@ def generate_excel_report(df):
             total_format = workbook.add_format({'bold': True, 'font_size': 14 ,'bg_color': "#4444C4", 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
             totalgross_format = workbook.add_format({'bold': True,  'align': 'left'})
             
+            has_rpm = 'RPM' in df.columns and df['RPM'].sum() > 0
+            
             summary_data = []
             for driver in sorted(df['Driver'].unique()):
                 d_df = df[df['Driver'] == driver]
+                avg_rpm = d_df['RPM'].mean() if has_rpm else 0
                 summary_data.append({
                     'Driver': driver,
                     'Total Paid': d_df['Tolangan'].sum(),
                     'Total Pending': d_df[d_df['Status'] == 'Unpaid']['Kutilgan'].sum(),
-                    'Total Trips': len(d_df)
+                    'Total Trips': len(d_df),
+                    'Avg RPM': avg_rpm if has_rpm else None
                 })
             
             summary_df = pd.DataFrame(summary_data)
@@ -840,46 +938,41 @@ def generate_excel_report(df):
             for i, col in enumerate(summary_df.columns):
                 ws.write(1, i, col, header_format)
             ws.set_column('A:A', 25)
-            ws.set_column('B:C', 15,)
+            ws.set_column('B:D', 15)
+            if has_rpm:
+                ws.set_column('E:E', 15)
             
             for driver in sorted(df['Driver'].unique()):
                 d_df = df[df['Driver'] == driver].copy()
-                export_df = d_df[['ID', 'Start Location', 'Start Time', 'End Location', 'End Time', 'Kutilgan', 'Tolangan', 'Farq', ]]
+                # Select columns for export
+                cols = ['ID', 'Start Location', 'Start Time', 'End Location', 'End Time', 'Kutilgan', 'Tolangan', 'Farq']
+                if has_rpm:
+                    cols.append('RPM')
+                export_df = d_df[cols]
                 sheet_name = driver.replace('/', '-')[:31]
                 ws = workbook.add_worksheet(sheet_name)
 
-                # 1. Sarlavha
                 ws.write(1, 0, f'Driver: {driver}', workbook.add_format({'bold': True, 'font_size': 14}))
                 
-                # 2. Jadval sarlavhalarini yozish
                 headers = export_df.columns.values
                 for i, h in enumerate(headers):
                     ws.write(2, i, h, header_format)
-                #(Row by Row)
                 for i, row in enumerate(export_df.itertuples(index=False)):
-                    ws.write(i+3, 0, row[0], text_format)
-                    ws.write(i+3, 1, row[1], text_format)
-                    ws.write(i+3, 2, row[2], text_format)
-                    ws.write(i+3, 3, row[3], text_format)
-                    ws.write(i+3, 4, row[4], text_format)
-                    ws.write(i+3, 5, row[5], currency_format)
-                    ws.write(i+3, 6, row[6], currency_format)
-                    ws.write(i+3, 7, row[7], currency_format)
-                # YANGI LOGIKA
-                last_row = len(d_df) + 3 # Ma'lumotlardan keyingi qatorni aniqlaymiz
-    
-                # Jami summani hisoblaymiz
-                total_tolangan = d_df['Tolangan'].sum()
-
-                # A dan E gacha bo'lgan kataklarni birlashtirib "TOTAL GROSS:" deb yozamiz
-                ws.merge_range(last_row, 4, last_row, 5, 'TOTAL GROSS:', totalgross_format)
-
-                # Hisoblangan summalarni tegishli ustunlarga (F, G, H) yozamiz
-                ws.write(last_row, 6, total_tolangan, total_format) # G ustuni
-
+                    for j, val in enumerate(row):
+                        if isinstance(val, (int, float)):
+                            if j in [5,6,7]: # Kutilgan, Tolangan, Farq
+                                ws.write(i+3, j, val, currency_format)
+                            elif j == 8 and has_rpm: # RPM
+                                ws.write(i+3, j, val, currency_format)
+                            else:
+                                ws.write(i+3, j, val, text_format)
+                        else:
+                            ws.write(i+3, j, val, text_format)
                 
-
-                # --- YANGI LOGIKA TUGADI ---
+                last_row = len(d_df) + 3
+                total_tolangan = d_df['Tolangan'].sum()
+                ws.merge_range(last_row, 4, last_row, 5, 'TOTAL GROSS:', totalgross_format)
+                ws.write(last_row, 6, total_tolangan, total_format)
                 
                 # Set column widths
                 ws.set_column('A:A', 16)
@@ -888,10 +981,12 @@ def generate_excel_report(df):
                 ws.set_column('D:D', 30)
                 ws.set_column('E:E', 25)
                 ws.set_column('F:H', 15)
+                if has_rpm:
+                    ws.set_column('I:I', 15)
         output.seek(0)
         return output
     except Exception as e:
-        st.error(f"Excel xatosi: {e}") # Bu xatoni ekranga chiqaradi
+        st.error(f"Excel xatosi: {e}")
         return None
 
 # ==============================================================================
@@ -960,7 +1055,8 @@ def main():
                 st.session_state['trips_data'][i_id] = {
                     'drivers': ["UNKNOWN"], 'expected_pay': 0.0, 'status': "Extra/Dispute",
                     'loads_str': "-", 'start_location': i_info.get('route', ''),
-                    'end_location': "", 'start_time': "", 'end_time': ""
+                    'end_location': "", 'start_time': "", 'end_time': "",
+                    'rpm': 0.0
                 }
                 ids_to_resolve.append({'id': i_id, 'reason': 'Extra Pay', 'options': sorted_drivers})
 
@@ -973,6 +1069,7 @@ def main():
         drivers = t_info['drivers']
         inv = invoice_data.get(t_id)
         paid = inv['paid_amount'] if inv else 0.0
+        rpm = t_info.get('rpm', 0.0)  # get RPM from trips data
         
         status = t_info['status']
         if status == "Extra/Dispute": final_status = "Extra Pay"
@@ -990,7 +1087,8 @@ def main():
                 "Start Location": t_info.get('start_location', ''), "Start Time": t_info.get('start_time', ''),
                 "End Location": t_info.get('end_location', ''), "End Time": t_info.get('end_time', ''),
                 "Kutilgan": expected, "Tolangan": paid, "Farq": diff,
-                "Yuklar (Trips)": t_info['loads_str'], "Yuklar (Inv)": len(inv['items']) if inv else 0
+                "Yuklar (Trips)": t_info['loads_str'], "Yuklar (Inv)": len(inv['items']) if inv else 0,
+                "RPM": rpm  # add RPM per trip
             })
             
     df = pd.DataFrame(rows)
@@ -1000,8 +1098,8 @@ def main():
         tab_analytics, tab_data = st.tabs(["📊 Smart Analytics", "📋 Data & Export"])
         
         with tab_analytics:
-            # Top Metrics Row
-            col1, col2, col3, col4 = st.columns(4)
+            # Top Metrics Row (include Average RPM if available)
+            col1, col2, col3, col4, col5 = st.columns(5)
             paid_total = df['Tolangan'].sum()
             inv_total = st.session_state['invoice_total']
             
@@ -1010,9 +1108,18 @@ def main():
             with col3: st.metric("Farq", format_currency(paid_total - inv_total))
             with col4: st.metric("Yuklar Soni", len(df))
             
+            # Average RPM if RPM data exists
+            avg_rpm = 0
+            has_rpm = 'RPM' in df.columns and df['RPM'].sum() > 0
+            if has_rpm:
+                avg_rpm = df['RPM'].mean()
+                with col5: st.metric("Oʻrtacha RPM", f"{avg_rpm:.2f}")
+            else:
+                with col5: st.metric("Oʻrtacha RPM", "N/A")
+            
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # ADVANCED GRAPHS
+            # ADVANCED GRAPHS (with RPM)
             render_advanced_charts(df)
             
         with tab_data:
@@ -1032,11 +1139,16 @@ def main():
             for c in ['Kutilgan', 'Tolangan', 'Farq']:
                 show_df[c] = show_df[c].apply(format_currency)
                 
+            # Optionally show RPM
+            col_order = ["ID", "Start Location", "Start Time", "End Location", "End Time", "Kutilgan", "Tolangan", "Farq", "Status"]
+            if has_rpm:
+                col_order.insert(8, "RPM")
+                
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             st.markdown("### 📊 Ma'lumotlar Jadvali")
             st.dataframe(
                 show_df,
-                column_order=("ID", "Start Location", "Start Time", "End Location", "End Time", "Kutilgan", "Tolangan", "Farq", "Status"),
+                column_order=col_order,
                 hide_index=True,
                 use_container_width=True,
                 height=500
